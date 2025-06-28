@@ -1,16 +1,16 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import { User as SupabaseUser } from '@supabase/supabase-js';
-import { supabase } from '../lib/supabase';
-import { User, AuthContextType } from '../types';
-import { userProfileStorage } from '../utils/supabase-storage';
-import { sendWelcomeEmail } from '../utils/email';
+import React, { createContext, useContext, useEffect, useState } from "react";
+import { User as SupabaseUser } from "@supabase/supabase-js";
+import { supabase, testSupabaseConnection } from "../lib/supabase";
+import { User, AuthContextType } from "../types";
+import { userProfileStorage } from "../utils/supabase-storage";
+import { sendWelcomeEmail } from "../utils/email";
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
 export function useAuth() {
   const context = useContext(AuthContext);
   if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
+    throw new Error("useAuth must be used within an AuthProvider");
   }
   return context;
 }
@@ -20,6 +20,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // Test Supabase connection first
+    testSupabaseConnection().then(isConnected => {
+      if (!isConnected) {
+        console.error('Failed to connect to Supabase');
+      }
+    });
+
     // Get initial session
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) {
@@ -33,6 +40,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log('Auth state change:', event, session?.user?.id);
       if (session?.user) {
         await loadUserProfile(session.user);
       } else {
@@ -50,11 +58,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (profile) {
         setUser({
           ...profile,
-          email: authUser.email || ''
+          email: authUser.email || "",
         });
       }
     } catch (error) {
-      console.error('Error loading user profile:', error);
+      console.error("Error loading user profile:", error);
     } finally {
       setLoading(false);
     }
@@ -65,122 +73,172 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const birthDate = new Date(dateOfBirth);
     let age = today.getFullYear() - birthDate.getFullYear();
     const monthDiff = today.getMonth() - birthDate.getMonth();
-    
-    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+
+    if (
+      monthDiff < 0 ||
+      (monthDiff === 0 && today.getDate() < birthDate.getDate())
+    ) {
       age--;
     }
-    
+
     return age;
   };
 
   const validateContactNumber = (contactNumber: string): boolean => {
     // Remove all non-digit characters
-    const cleanNumber = contactNumber.replace(/\D/g, '');
-    
+    const cleanNumber = contactNumber.replace(/\D/g, "");
+
     // Check if it's a valid Indian mobile number (10 digits starting with 6-9)
     const indianMobileRegex = /^[6-9]\d{9}$/;
     return indianMobileRegex.test(cleanNumber);
   };
+  /////
+
+  ////
+
+  /////
 
   const signup = async (
-    name: string, 
-    email: string, 
-    password: string, 
+    name: string,
+    email: string,
+    password: string,
     contactNumber: string,
-    userType: 'farmer' | 'worker',
+    userType: "farmer" | "worker",
     location?: string,
     dateOfBirth?: string
   ): Promise<{ success: boolean; error?: string }> => {
     try {
-      // Validate contact number
-      if (!validateContactNumber(contactNumber)) {
-        return { success: false, error: 'Please enter a valid 10-digit mobile number' };
-      }
-
-      // Check if contact number already exists
-      const allProfiles = await userProfileStorage.getAllUserProfiles();
-      const existingContact = allProfiles.find((u: User) => u.contactNumber === contactNumber.replace(/\D/g, ''));
-      if (existingContact) {
-        return { success: false, error: 'Contact number already registered' };
-      }
-
-      // Validate age for workers
-      if (userType === 'worker' && dateOfBirth) {
-        const age = calculateAge(dateOfBirth);
-        if (age < 16) {
-          return { success: false, error: 'Workers must be at least 16 years old to register' };
-        }
-      }
-
-      // Create auth user
-      const { data: authData, error: authError } = await supabase.auth.signUp({
+      console.log('Starting signup process for:', email);
+      
+      // Step 1: Sign up the user with metadata
+      const { data, error: signUpError } = await supabase.auth.signUp({
         email,
-        password
+        password,
+        options: {
+          data: {
+            name,
+            contact_number: contactNumber,
+            user_type: userType,
+            location,
+            date_of_birth: dateOfBirth,
+          },
+        },
       });
 
-      if (authError) {
-        if (authError.message.includes('already registered')) {
-          return { success: false, error: 'Email already exists' };
-        }
-        return { success: false, error: authError.message };
+      if (signUpError) {
+        console.error('Signup error:', signUpError);
+        return {
+          success: false,
+          error: signUpError.message || "Signup failed",
+        };
       }
 
-      if (!authData.user) {
-        return { success: false, error: 'Failed to create user account' };
+      if (!data?.user) {
+        console.error('No user data returned from signup');
+        return {
+          success: false,
+          error: "No user data returned from signup",
+        };
       }
 
-      // If we have a session, ensure it's set in the client
-      // This is necessary for the profile creation to be authenticated
-      if (authData.session) {
-        await supabase.auth.setSession({
-          access_token: authData.session.access_token,
-          refresh_token: authData.session.refresh_token
-        });
-      }
+      console.log('User created successfully:', data.user.id);
 
-      // Create user profile
-      const newUser: User = {
-        id: authData.user.id,
-        name,
-        email,
-        contactNumber: contactNumber.replace(/\D/g, ''), // Store only digits
-        userType,
-        location,
-        dateOfBirth,
-        createdAt: new Date().toISOString()
-      };
+      // Step 2: Wait a moment for the session to be established
+      await new Promise(resolve => setTimeout(resolve, 1000));
 
-      const profileCreated = await userProfileStorage.createUserProfile(newUser);
+      // Step 3: Get the current session
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
       
-      if (!profileCreated) {
-        return { success: false, error: 'Failed to create user profile' };
+      if (sessionError) {
+        console.error('Session error:', sessionError);
+        return { success: false, error: "Failed to get session after signup" };
       }
 
-      // Send welcome email
-      await sendWelcomeEmail(name, email);
+      const session = sessionData?.session;
+      if (!session) {
+        console.log('No active session, user may need email confirmation');
+        // Check if email confirmation is required
+        if (data.user && !data.user.email_confirmed_at) {
+          return { 
+            success: false, 
+            error: "Please check your email and confirm your account before logging in" 
+          };
+        }
+        return { success: false, error: "No active session after signup" };
+      }
 
+      console.log('Session established, inserting profile...');
+
+      // Step 4: Insert into user_profiles with retry logic
+      let insertError = null;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const { error } = await supabase
+          .from("user_profiles")
+          .insert([
+            {
+              id: data.user.id,
+              name,
+              contact_number: contactNumber,
+              user_type: userType,
+              location: location || null,
+              date_of_birth: dateOfBirth || null,
+            },
+          ]);
+
+        if (!error) {
+          console.log('Profile inserted successfully on attempt', attempt);
+          break;
+        }
+
+        insertError = error;
+        console.error(`Profile insert attempt ${attempt} failed:`, error);
+        
+        if (attempt < 3) {
+          await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+        }
+      }
+
+      if (insertError) {
+        console.error('All profile insert attempts failed:', insertError);
+        return { success: false, error: insertError.message };
+      }
+
+      console.log('Signup completed successfully');
       return { success: true };
-    } catch (error) {
-      console.error('Signup error:', error);
-      return { success: false, error: 'Something went wrong. Please try again.' };
+    } catch (err: any) {
+      console.error('Unexpected signup error:', err);
+      return { success: false, error: err.message || "Unexpected error during signup" };
     }
   };
 
+  ///
+  /////
+  ////
+  /////
+
   const login = async (email: string, password: string): Promise<boolean> => {
     try {
-      const { error } = await supabase.auth.signInWithPassword({
+      console.log('Attempting login for:', email);
+      
+      const { data, error } = await supabase.auth.signInWithPassword({
         email,
-        password
+        password,
       });
 
       if (error) {
-        console.error('Login error:', error);
+        console.error("Login error:", error.message);
         return false;
       }
 
+      if (!data.user) {
+        console.error("No user data returned from login");
+        return false;
+      }
+
+      console.log('Login successful for user:', data.user.id);
       return true;
     } catch (error) {
-      console.error('Login error:', error);
+      console.error("Login error:", error);
       return false;
     }
   };
@@ -189,13 +247,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!user) return;
 
     try {
-      const success = await userProfileStorage.updateUserProfile(user.id, updates);
-      
+      const success = await userProfileStorage.updateUserProfile(
+        user.id,
+        updates
+      );
+
       if (success) {
-        setUser(prevUser => prevUser ? { ...prevUser, ...updates } : null);
+        setUser((prevUser) => (prevUser ? { ...prevUser, ...updates } : null));
       }
     } catch (error) {
-      console.error('Error updating user:', error);
+      console.error("Error updating user:", error);
     }
   };
 
@@ -204,12 +265,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await supabase.auth.signOut();
       setUser(null);
     } catch (error) {
-      console.error('Logout error:', error);
+      console.error("Logout error:", error);
     }
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, signup, logout, loading, updateUser }}>
+    <AuthContext.Provider
+      value={{ user, login, signup, logout, loading, updateUser }}
+    >
       {children}
     </AuthContext.Provider>
   );

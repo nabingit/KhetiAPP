@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/SupabaseAuthContext';
 import { useNavigate } from 'react-router-dom';
 import { Sprout, Eye, EyeOff, MapPin, Calendar, Phone } from 'lucide-react';
+import { testSupabaseConnection } from '../lib/supabase';
 
 export function AuthPage() {
   const [isLogin, setIsLogin] = useState(true);
@@ -17,9 +18,17 @@ export function AuthPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<'testing' | 'connected' | 'failed'>('testing');
   
   const { login, signup } = useAuth();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    // Test connection on component mount
+    testSupabaseConnection().then(isConnected => {
+      setConnectionStatus(isConnected ? 'connected' : 'failed');
+    });
+  }, []);
 
   const calculateAge = (dateOfBirth: string): number => {
     const today = new Date();
@@ -347,6 +356,27 @@ export function AuthPage() {
               {loading ? 'Please wait...' : isLogin ? 'Login' : 'Create Account'}
             </button>
           </form>
+
+          {/* Debug Section - Only show in development */}
+          {import.meta.env.DEV && (
+            <div className="mt-6 p-4 bg-gray-50 rounded-lg border">
+              <h3 className="text-sm font-medium text-gray-700 mb-2">Debug Information</h3>
+              <div className="space-y-1 text-xs text-gray-600">
+                <div>Connection Status: 
+                  <span className={`ml-1 px-2 py-1 rounded text-xs ${
+                    connectionStatus === 'connected' ? 'bg-green-100 text-green-800' :
+                    connectionStatus === 'failed' ? 'bg-red-100 text-red-800' :
+                    'bg-yellow-100 text-yellow-800'
+                  }`}>
+                    {connectionStatus}
+                  </span>
+                </div>
+                <div>Supabase URL: {import.meta.env.VITE_SUPABASE_URL || 'Not set'}</div>
+                <div>API Key: {import.meta.env.VITE_SUPABASE_ANON_KEY ? 'Present' : 'Missing'}</div>
+                {error && <div className="text-red-600">Error: {error}</div>}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
