@@ -76,21 +76,25 @@ export function AuthPage() {
     setLoading(true);
 
     try {
-      let success = false;
-      
       if (isLogin) {
-        success = await login(formData.email, formData.password);
+        const success = await login(formData.email, formData.password);
         if (!success) {
           setError('Invalid email or password');
+          setLoading(false);
+          return;
         }
+        navigate('/');
+        return;
       } else {
         if (!formData.name.trim()) {
           setError('Name is required');
+          setLoading(false);
           return;
         }
 
         if (!formData.contactNumber.trim()) {
           setError('Contact number is required');
+          setLoading(false);
           return;
         }
 
@@ -98,17 +102,20 @@ export function AuthPage() {
         if (formData.userType === 'worker') {
           if (!formData.location.trim()) {
             setError('Location is required for workers');
+            setLoading(false);
             return;
           }
           
           if (!formData.dateOfBirth) {
             setError('Date of birth is required for workers');
+            setLoading(false);
             return;
           }
 
           const age = calculateAge(formData.dateOfBirth);
           if (age < 16) {
             setError('Workers must be at least 16 years old to register');
+            setLoading(false);
             return;
           }
         }
@@ -125,13 +132,11 @@ export function AuthPage() {
         
         if (!result.success) {
           setError(result.error || 'Registration failed');
-        } else {
-          success = true;
+          setLoading(false);
+          return;
         }
-      }
-
-      if (success) {
         navigate('/');
+        return;
       }
     } catch (err) {
       setError('Something went wrong. Please try again.');
